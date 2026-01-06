@@ -2,6 +2,9 @@ const { Twilio } = require('twilio');
 
 class WhatsAppBotNatural {
   constructor(safetyManager) {
+    console.log('🔧 WhatsApp Bot Constructor');
+    console.log('  TWILIO_WHATSAPP_NUMBER:', process.env.TWILIO_WHATSAPP_NUMBER);
+    
     this.client = new Twilio(
       process.env.TWILIO_ACCOUNT_SID,
       process.env.TWILIO_AUTH_TOKEN
@@ -45,8 +48,7 @@ class WhatsAppBotNatural {
       Body: message,
       MediaUrl0: mediaUrl,
       MediaContentType0: mediaType,
-      NumMedia: numMedia,
-      MessageSid: messageId
+      NumMedia: numMedia
     } = data;
 
     console.log(`📱 Message from ${from}: "${message?.substring(0, 50) || '(media)'}"`);
@@ -75,130 +77,132 @@ class WhatsAppBotNatural {
         await this.sendMessage(from, response.text, response.media);
       }
     } catch (error) {
-      console.error('Processing error:', error);
+      console.error('Processing error:', error.message);
       await this.sendMessage(from, 'Sorry, I encountered an error. Please try again.');
     }
   }
 
   async handleTextMessage(from, message, session) {
+    console.log('📝 Processing text:', message);
     const normalized = message.toLowerCase().trim();
     
     // ============ GREETINGS ============
     if (this.isGreeting(normalized)) {
+      console.log('👋 Detected greeting');
       return this.handleGreeting(from, session);
     }
     
     // ============ HELP REQUESTS ============
     if (this.isHelpRequest(normalized)) {
+      console.log('❓ Detected help request');
       return this.handleHelp(from);
+    }
+    
+    // ============ MODE COMMANDS (SIMPLIFIED - FIXED) ============
+    if (normalized === 'use ai' || normalized === 'ai mode' || 
+        normalized === 'turn on ai' || normalized === 'ai on' ||
+        normalized === 'enable ai' || normalized === 'switch to ai') {
+      console.log('🤖 Switching to AI mode');
+      session.voiceAIMode = true;
+      session.textAIMode = true;
+      this.updateSession(from, session);
+      return { text: '✅ Switched to *AI Mode*. I\'ll use AI for all responses.' };
+    }
+    
+    if (normalized === 'use knowledge' || normalized === 'kb mode' || 
+        normalized === 'knowledge mode' || normalized === 'turn off ai' ||
+        normalized === 'ai off' || normalized === 'use kb') {
+      console.log('📚 Switching to KB mode');
+      session.voiceAIMode = false;
+      session.textAIMode = false;
+      this.updateSession(from, session);
+      return { text: '✅ Switched to *Knowledge Mode*. I\'ll use my knowledge base first.' };
+    }
+    
+    if (normalized === 'what mode' || normalized === 'current mode' || 
+        normalized === 'which mode' || normalized === 'mode?') {
+      console.log('🔧 Checking mode');
+      const mode = session.voiceAIMode ? '🤖 AI Mode' : '📚 Knowledge Mode';
+      return { text: `Current mode: ${mode}\n\nSay "use AI" or "use knowledge" to switch.` };
     }
     
     // ============ SESSION STATES ============
     if (session.expecting === 'add_question') {
+      console.log('📝 Processing add question');
       return this.handleAddQuestion(from, message, session);
     }
     
     if (session.expecting === 'add_answer') {
+      console.log('📝 Processing add answer');
       return this.handleAddAnswer(from, message, session);
     }
     
     if (session.expecting === 'search_query') {
+      console.log('🔍 Processing search');
       return this.handleSearch(from, message, session);
     }
     
     if (session.waitingForDocumentQuestion) {
+      console.log('📄 Processing document question');
       return this.handleDocumentQuestion(from, message, session);
     }
     
-    // ============ NATURAL COMMANDS ============
-    if (this.isNaturalCommand(normalized)) {
-      return this.handleNaturalCommand(from, normalized, session);
+    // ============ OTHER COMMANDS ============
+    if (normalized === 'teach' || normalized === 'add knowledge' || 
+        normalized === 'remember this' || normalized === 'learn something') {
+      console.log('🎓 Starting teach flow');
+      session.expecting = 'add_question';
+      this.updateSession(from, session);
+      return { text: '📚 Great! What question should I learn?\n\nExample: "What is artificial intelligence?"' };
+    }
+    
+    if (normalized.startsWith('search for ') || normalized.startsWith('find ') || 
+        normalized.startsWith('look up ')) {
+      console.log('🔍 Starting search');
+      const query = normalized.replace(/^(search for|find|look up)\s+/i, '');
+      return this.handleSearch(from, query, session);
+    }
+    
+    if (normalized === 'stats' || normalized === 'statistics' || 
+        normalized === 'how many' || normalized === 'status') {
+      console.log('📊 Getting stats');
+      return this.handleStats(from, session);
+    }
+    
+    if (normalized === 'faq' || normalized === 'frequently asked' || 
+        normalized === 'questions') {
+      console.log('❓ Showing FAQ');
+      return this.handleFAQ(from);
     }
     
     // ============ DEFAULT: AI RESPONSE ============
+    console.log('💭 Getting AI response');
     return this.handleAIResponse(from, message, session);
   }
 
-  // ============ COMMAND DETECTORS ============
+  // ============ SIMPLIFIED DETECTORS ============
   isGreeting(message) {
-    const greetings = ['hi', 'hello', 'hey', 'hola', 'good morning', 'good afternoon', 'good evening', 'gm', 'gn'];
+    const greetings = ['hi', 'hello', 'hey', 'hola', 'good morning', 'good afternoon', 'good evening'];
     return greetings.some(greet => message.includes(greet));
   }
 
   isHelpRequest(message) {
-    const helpKeywords = ['help', 'what can you do', 'commands', 'menu', 'options', 'features'];
+    const helpKeywords = ['help', 'what can you do', 'commands', 'menu', 'options'];
     return helpKeywords.some(keyword => message.includes(keyword));
-  }
-
-  isNaturalCommand(message) {
-    const commands = {
-      // AI Mode
-      'use ai': 'ai_on',
-      'ai mode': 'ai_on', 
-      'turn on ai': 'ai_on',
-      'enable ai': 'ai_on',
-      
-      // KB Mode
-      'use knowledge': 'ai_off',
-      'kb mode': 'ai_off',
-      'knowledge mode': 'ai_off',
-      'turn off ai': 'ai_off',
-      
-      // Teach me
-      'teach': 'teach',
-      'add knowledge': 'teach',
-      'remember this': 'teach',
-      'learn something': 'teach',
-      
-      // Search
-      'search for': 'search',
-      'find': 'search',
-      'look up': 'search',
-      
-      // Stats
-      'stats': 'stats',
-      'statistics': 'stats',
-      'how many': 'stats',
-      'status': 'stats',
-      
-      // FAQ
-      'faq': 'faq',
-      'frequently asked': 'faq',
-      'questions': 'faq',
-      
-      // Mode status
-      'what mode': 'mode_status',
-      'current mode': 'mode_status',
-      
-      // Document actions (after upload)
-      'summarize': 'summarize',
-      'summary': 'summarize',
-      'save document': 'save_doc',
-      'save this': 'save_doc',
-      'extract': 'extract',
-      'key points': 'extract'
-    };
-    
-    for (const [keyword, command] of Object.entries(commands)) {
-      if (message.includes(keyword)) {
-        return command;
-      }
-    }
-    
-    return null;
   }
 
   // ============ COMMAND HANDLERS ============
   async handleGreeting(from, session) {
-    const stats = await this.ai.getKnowledgeStats();
     const mode = session.voiceAIMode ? '🤖 AI Mode' : '📚 Knowledge Mode';
     
     return {
       text: `👋 Hello! I'm your AI assistant.\n\n` +
-            `📊 I have ${stats} pieces of knowledge.\n` +
             `🔧 Current: ${mode}\n\n` +
             `💬 *Just ask me anything!*\n\n` +
-            `Need help? Type "help" or "what can you do"`
+            `To switch modes:\n` +
+            `• Say "use AI" for AI mode\n` +
+            `• Say "use knowledge" for knowledge mode\n\n` +
+            `Need help? Type "help"`
     };
   }
 
@@ -206,70 +210,40 @@ class WhatsAppBotNatural {
     return {
       text: `🤖 *Here's what I can do:*\n\n` +
             `💬 *Ask questions* - Just type your question\n\n` +
-            `📚 *Teach me* - Say "teach" or "add knowledge"\n\n` +
+            `🤖 *Switch to AI mode* - Say "use AI"\n\n` +
+            `📚 *Switch to knowledge mode* - Say "use knowledge"\n\n` +
+            `🎓 *Teach me* - Say "teach"\n\n` +
             `🔍 *Search* - Say "search for [topic]"\n\n` +
-            `🤖 *Switch modes* - Say "use AI" or "use knowledge"\n\n` +
             `📄 *Upload documents* - Send PDF/TXT files\n\n` +
-            `📊 *See stats* - Say "stats" or "status"\n\n` +
-            `❓ *FAQs* - Say "faq" or "questions"\n\n` +
-            `🎤 *Voice messages* - Coming soon!\n\n` +
-            `👉 *Just start chatting naturally!*`
+            `📊 *See stats* - Say "stats"\n\n` +
+            `❓ *FAQs* - Say "faq"\n\n` +
+            `👉 *Just start chatting!*`
     };
   }
 
-  async handleNaturalCommand(from, command, session) {
-    switch (command) {
-      case 'ai_on':
-        session.voiceAIMode = true;
-        session.textAIMode = true;
-        this.updateSession(from, session);
-        return { text: '✅ Switched to *AI Mode*. I\'ll use AI for all responses.' };
-        
-      case 'ai_off':
-        session.voiceAIMode = false;
-        session.textAIMode = false;
-        this.updateSession(from, session);
-        return { text: '✅ Switched to *Knowledge Mode*. I\'ll use my knowledge base first.' };
-        
-      case 'teach':
-        session.expecting = 'add_question';
-        this.updateSession(from, session);
-        return { text: '📚 Great! What question should I learn?\n\nExample: "What is artificial intelligence?"' };
-        
-      case 'search':
-        session.expecting = 'search_query';
-        this.updateSession(from, session);
-        return { text: '🔍 What would you like me to search for?\n\nExample: "password reset"' };
-        
-      case 'stats':
-        const stats = await this.ai.getKnowledgeStats();
-        const mode = session.voiceAIMode ? 'AI Mode' : 'Knowledge Mode';
-        return {
-          text: `📊 *Bot Statistics*\n\n` +
-                `• Knowledge items: ${stats}\n` +
-                `• Current mode: ${mode}\n` +
-                `• AI available: ${process.env.GROQ_API_KEY ? 'Yes ✅' : 'No'}\n` +
-                `• Voice support: Coming soon!\n` +
-                `• Session active: ${this.sessions.size} users`
-        };
-        
-      case 'faq':
-        const count = await this.ai.getKnowledgeStats();
-        return {
-          text: `❓ *Frequently Asked Questions*\n\n` +
-                `I have ${count} knowledge items.\n\n` +
-                `To search, say: "search for [topic]"\n\n` +
-                `To add knowledge, say: "teach"\n\n` +
-                `Or just ask me anything!`
-        };
-        
-      case 'mode_status':
-        const currentMode = session.voiceAIMode ? '🤖 AI Mode' : '📚 Knowledge Mode';
-        return { text: `Current mode: ${currentMode}\n\nSay "use AI" or "use knowledge" to switch.` };
-        
-      default:
-        return { text: `I'm not sure what you mean by "${command}". Try saying "help" to see what I can do.` };
-    }
+  async handleStats(from, session) {
+    const stats = await this.ai.getKnowledgeStats();
+    const mode = session.voiceAIMode ? 'AI Mode' : 'Knowledge Mode';
+    
+    return {
+      text: `📊 *Bot Statistics*\n\n` +
+            `• Knowledge items: ${stats}\n` +
+            `• Current mode: ${mode}\n` +
+            `• AI available: ${process.env.GROQ_API_KEY ? 'Yes ✅' : 'No'}\n` +
+            `• Voice support: Coming soon!\n` +
+            `• Active chats: ${this.sessions.size}`
+    };
+  }
+
+  async handleFAQ(from) {
+    const count = await this.ai.getKnowledgeStats();
+    return {
+      text: `❓ *Frequently Asked Questions*\n\n` +
+            `I have ${count} knowledge items.\n\n` +
+            `To search: "search for [topic]"\n\n` +
+            `To add: "teach"\n\n` +
+            `Or just ask me anything!`
+    };
   }
 
   async handleAddQuestion(from, question, session) {
@@ -285,13 +259,6 @@ class WhatsAppBotNatural {
   async handleAddAnswer(from, answer, session) {
     const question = session.pendingQuestion;
     
-    if (!question || !answer) {
-      delete session.expecting;
-      delete session.pendingQuestion;
-      this.updateSession(from, session);
-      return { text: 'Something went wrong. Please try saying "teach" again.' };
-    }
-    
     try {
       const result = await this.ai.addKnowledge(question, answer);
       delete session.expecting;
@@ -301,8 +268,7 @@ class WhatsAppBotNatural {
       return {
         text: `✅ Successfully learned!\n\n` +
               `*Question:* ${question}\n` +
-              `*Answer:* ${answer.substring(0, 100)}${answer.length > 100 ? '...' : ''}\n\n` +
-              `You can now ask me about "${question.split(' ')[0]}..."`
+              `*Answer:* ${answer.substring(0, 100)}${answer.length > 100 ? '...' : ''}`
       };
     } catch (error) {
       delete session.expecting;
@@ -320,19 +286,20 @@ class WhatsAppBotNatural {
     
     if (result.source === 'knowledge_base') {
       return {
-        text: `🔍 *Found in knowledge:*\n\n${result.answer}\n\n` +
-              `Want to know more? Just ask!`
+        text: `🔍 *Found in knowledge:*\n\n${result.answer}`
       };
     } else {
       return {
         text: `🔍 No exact match found for "${query}".\n\n` +
-              `I can try with AI if you'd like. Just ask your question again!`
+              `Try asking in AI mode by saying "use AI" first.`
       };
     }
   }
 
   async handleAIResponse(from, message, session) {
     const useAI = session.voiceAIMode || false;
+    console.log(`💭 Getting answer (AI mode: ${useAI})`);
+    
     const result = await this.ai.getAnswer(message, useAI);
     
     let responseText = result.answer;
@@ -365,7 +332,7 @@ class WhatsAppBotNatural {
     
     if (mediaType.includes('audio')) {
       return {
-        text: "🎤 I received your voice message! Voice processing is coming soon. For now, please type your message or send a document."
+        text: "🎤 Voice message received! Voice processing coming soon."
       };
     } else if (mediaType.includes('pdf') || mediaType === 'text/plain') {
       const fileType = mediaType.includes('pdf') ? 'PDF' : 'text';
@@ -387,12 +354,7 @@ class WhatsAppBotNatural {
         return {
           text: `✅ Document processed!\n\n` +
                 `I've extracted ${docInfo.text.length} characters.\n\n` +
-                `💡 *Now you can:*\n` +
-                `• Ask questions about it\n` +
-                `• Say "summarize" for a summary\n` +
-                `• Say "extract" for key points\n` +
-                `• Say "save document" to add to knowledge\n\n` +
-                `Just type your question!`
+                `💡 Now you can ask questions about it!`
         };
       } catch (error) {
         return { text: `❌ Error: ${error.message}` };
@@ -400,11 +362,7 @@ class WhatsAppBotNatural {
     } else {
       return {
         text: `📎 I received your ${mediaType.split('/')[1]} file.\n\n` +
-              `I currently support:\n` +
-              `• PDF documents\n` +
-              `• Text files (.txt)\n` +
-              `• Voice messages (coming soon)\n\n` +
-              `Try sending a PDF or text file!`
+              `I support PDF and text files.`
       };
     }
   }
@@ -417,8 +375,6 @@ class WhatsAppBotNatural {
     }
     
     const context = session.documentText.substring(0, 3000);
-    
-    await this.sendMessage(from, '🤔 Thinking about your question...');
     
     try {
       const answer = await this.ai.queryGroqAI(
@@ -460,11 +416,12 @@ class WhatsAppBotNatural {
   getSession(userId) {
     if (!this.sessions.has(userId)) {
       this.sessions.set(userId, {
-        voiceAIMode: false,
+        voiceAIMode: false,  // Default: Knowledge mode
         textAIMode: false,
         createdAt: Date.now(),
         lastActivity: Date.now()
       });
+      console.log(`👤 New session for ${userId.substring(0, 15)}...`);
     }
     
     const session = this.sessions.get(userId);
@@ -479,7 +436,7 @@ class WhatsAppBotNatural {
 
   handleStatusCallback(req, res) {
     const { MessageSid, MessageStatus } = req.body;
-    console.log(`📊 Message ${MessageSid.substring(0, 8)}: ${MessageStatus}`);
+    console.log(`📊 Message ${MessageSid?.substring(0, 8)}: ${MessageStatus}`);
     res.set('Content-Type', 'text/xml');
     res.send('<Response></Response>');
   }
